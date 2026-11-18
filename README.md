@@ -29,7 +29,30 @@ It can do a lot of cool things, some of them being:
 
 ## Requirements
 
-Python 3.6+
+Python 3.9+ on Windows, macOS or Linux. A microphone is needed for voice mode.
+
+## 📌Quick start on a Mac (Apple Silicon, e.g. Mac mini M4)
+
+```bash
+git clone <URL> && cd Jarvis-Desktop-Voice-Assistant
+bash scripts/setup_mac.sh                      # Homebrew, PortAudio, Ollama, venv, model
+JARVIS_LANG=zh-TW .venv/bin/python Jarvis/jarvis.py           # voice
+JARVIS_LANG=zh-TW .venv/bin/python Jarvis/jarvis.py --text    # keyboard / SSH
+```
+
+Anything Jarvis has no built-in command for is answered by a local LLM through
+[Ollama](https://ollama.com), so no API key is needed. Settings:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `JARVIS_LANG` | `en-US` | Speech and voice language, e.g. `zh-TW` |
+| `JARVIS_MODEL` | `qwen2.5:7b` | Ollama model |
+| `JARVIS_OLLAMA_URL` | `http://localhost:11434` | Ollama server |
+| `JARVIS_DATA_DIR` | `~/.jarvis` | Where settings are stored |
+| `JARVIS_ALLOW_POWER` | off | Set to `1` to allow voice shutdown/restart (asks for confirmation) |
+| `JARVIS_MUTE` | off | Set to `1` to print replies without speaking |
+
+Run the hardware-free tests with `python -m unittest discover -s tests`.
 
 ## 📌Installation
 
@@ -69,7 +92,7 @@ Python 3.6+
 6. **Run the Assistant**
   - Run the main script:
     ```bash
-    python jarvis.py
+    python Jarvis/jarvis.py
     ```
   - Now Enjoy with your own assistant !!!!
 

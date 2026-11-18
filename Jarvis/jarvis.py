@@ -1,201 +1,421 @@
-import pyttsx3
+"""Jarvis desktop voice assistant.
+
+Runs on macOS, Windows and Linux. Commands that are not built in are answered
+by a local LLM served by Ollama (https://ollama.com), so no API key is needed.
+
+Configuration (environment variables):
+    JARVIS_LANG        Speech/voice language, e.g. "zh-TW" or "en-US" (default en-US)
+    JARVIS_MODEL       Ollama model name (default qwen2.5:7b)
+    JARVIS_OLLAMA_URL  Ollama server URL (default http://localhost:11434)
+    JARVIS_DATA_DIR    Where settings are stored (default ~/.jarvis)
+    JARVIS_ALLOW_POWER Set to 1 to allow voice shutdown/restart (off by default)
+    JARVIS_MUTE        Set to 1 to print replies without speaking them
+
+Run with --text to type commands instead of speaking (handy over SSH).
+"""
 import datetime
-import speech_recognition as sr
-import wikipedia
-import webbrowser as wb
+import json
 import os
+import platform
 import random
-import pyautogui
-import pyjokes
+import re
+import subprocess
+import sys
+import urllib.error
+import urllib.request
+import webbrowser as wb
+from pathlib import Path
 
-engine = pyttsx3.init()
-voices = engine.getProperty('voices')
-engine.setProperty('voice', voices[1].id)  
-engine.setProperty('rate', 150)
-engine.setProperty('volume', 1)
+SYSTEM = platform.system()  # "Darwin", "Windows" or "Linux"
+LANG = os.environ.get("JARVIS_LANG", "en-US")
+IS_ZH = LANG.lower().startswith("zh")
+OLLAMA_URL = os.environ.get("JARVIS_OLLAMA_URL", "http://localhost:11434").rstrip("/")
+MODEL = os.environ.get("JARVIS_MODEL", "qwen2.5:7b")
+DATA_DIR = Path(os.environ.get("JARVIS_DATA_DIR", Path.home() / ".jarvis"))
+ALLOW_POWER = os.environ.get("JARVIS_ALLOW_POWER") == "1"
+MUTE = os.environ.get("JARVIS_MUTE") == "1"
+AUDIO_EXTS = {".mp3", ".m4a", ".aac", ".wav", ".flac", ".ogg", ".aiff"}
+
+MESSAGES = {
+    "welcome": ("Welcome back, sir!", "歡迎回來！"),
+    "morning": ("Good morning!", "早安！"),
+    "afternoon": ("Good afternoon!", "午安！"),
+    "evening": ("Good evening!", "晚安！"),
+    "night": ("It's late, remember to rest.", "很晚了，記得休息。"),
+    "service": ("{name} at your service. How may I assist you?", "{name} 為您服務，請問需要什麼幫忙？"),
+    "time": ("The current time is {t}", "現在時間 {t}"),
+    "date": ("Today is {d}", "今天是 {d}"),
+    "not_understood": ("Sorry, I did not understand that.", "抱歉，我沒聽清楚。"),
+    "stt_down": ("Speech recognition service is unavailable.", "語音辨識服務無法連線。"),
+    "wiki_search": ("Searching Wikipedia...", "正在搜尋維基百科…"),
+    "wiki_multi": ("Multiple results found. Please be more specific.", "找到多個結果，請說得更具體一點。"),
+    "wiki_none": ("I couldn't find anything on Wikipedia.", "維基百科上找不到相關資料。"),
+    "playing": ("Playing {song}.", "正在播放 {song}。"),
+    "no_song": ("No song found.", "找不到歌曲。"),
+    "ask_name": ("What would you like to name me?", "你想幫我取什麼名字？"),
+    "named": ("Alright, I will be called {name} from now on.", "好的，從現在起我叫 {name}。"),
+    "no_name": ("Sorry, I couldn't catch that.", "抱歉，我沒聽清楚。"),
+    "screenshot": ("Screenshot saved as {path}.", "截圖已存到 {path}。"),
+    "screenshot_fail": ("I couldn't take a screenshot: {err}", "截圖失敗：{err}"),
+    "power_off": ("Voice power control is disabled.", "語音關機功能目前停用。"),
+    "confirm": ("Are you sure? Say yes to confirm.", "確定嗎？請說「確定」。"),
+    "cancelled": ("Cancelled.", "已取消。"),
+    "shutdown": ("Shutting down the system, goodbye!", "正在關機，再見！"),
+    "restart": ("Restarting the system, please wait!", "正在重新開機，請稍候！"),
+    "bye": ("Going offline. Have a good day!", "離線了，祝你有美好的一天！"),
+    "no_llm": ("Sorry, I can't do that yet.", "抱歉，這個我還不會。"),
+    "opening": ("Opening {site}.", "正在開啟 {site}。"),
+}
+
+# (action, keywords). Order matters: the first matching action wins, so
+# commands that carry an argument come before short words like "time".
+COMMANDS = [
+    ("wikipedia", ["wikipedia", "維基百科", "維基"]),
+    ("music", ["play music", "播放音樂", "放音樂", "放歌"]),
+    ("youtube", ["open youtube", "打開youtube", "開啟youtube"]),
+    ("google", ["open google", "打開google", "開啟google"]),
+    ("rename", ["change your name", "改名", "換名字"]),
+    ("screenshot", ["screenshot", "screen shot", "截圖"]),
+    ("joke", ["tell me a joke", "joke", "笑話"]),
+    ("shutdown", ["shutdown", "shut down", "關機"]),
+    ("restart", ["restart", "reboot", "重新開機", "重開機"]),
+    ("exit", ["exit", "offline", "goodbye", "離線", "再見", "結束"]),
+    ("time", ["time", "幾點", "時間"]),
+    ("date", ["date", "日期", "幾號", "星期幾"]),
+]
+YES_WORDS = ["yes", "confirm", "確定", "是", "對"]
+NO_WORDS = ["no", "not", "cancel", "不", "取消", "別"]
 
 
-def speak(audio) -> None:
-    engine.say(audio)
-    engine.runAndWait()
+def msg(key: str, **kwargs) -> str:
+    text = MESSAGES[key][1 if IS_ZH else 0]
+    return text.format(**kwargs)
 
 
-def time() -> None:
-    """Tells the current time."""
-    current_time = datetime.datetime.now().strftime("%I:%M:%S %p")
-    speak("The current time is")
-    speak(current_time)
-    print("The current time is", current_time)
+def normalize(text: str) -> str:
+    return text.lower().strip()
 
 
-def date() -> None:
-    """Tells the current date."""
-    now = datetime.datetime.now()
-    speak("The current date is")
-    speak(f"{now.day} {now.strftime('%B')} {now.year}")
-    print(f"The current date is {now.day}/{now.month}/{now.year}")
+def _matches(keyword: str, query: str) -> bool:
+    if keyword.isascii():
+        return re.search(rf"\b{re.escape(keyword)}\b", query) is not None
+    # Chinese speech results may or may not contain spaces.
+    return keyword in query.replace(" ", "")
 
 
-def wishme() -> None:
-    """Greets the user based on the time of day."""
-    speak("Welcome back, sir!")
-    print("Welcome back, sir!")
-
-    hour = datetime.datetime.now().hour
-    if 4 <= hour < 12:
-        speak("Good morning!")
-        print("Good morning!")
-    elif 12 <= hour < 16:
-        speak("Good afternoon!")
-        print("Good afternoon!")
-    elif 16 <= hour < 24:
-        speak("Good evening!")
-        print("Good evening!")
-    else:
-        speak("Good night, see you tomorrow.")
-
-    assistant_name = load_name()
-    speak(f"{assistant_name} at your service. Please tell me how may I assist you.")
-    print(f"{assistant_name} at your service. Please tell me how may I assist you.")
+def route(query: str):
+    """Return the action name for a query, or None if no command matches."""
+    query = normalize(query)
+    for action, keywords in COMMANDS:
+        if any(_matches(k, query) for k in keywords):
+            return action
+    return None
 
 
-def screenshot() -> None:
-    """Takes a screenshot and saves it."""
-    img = pyautogui.screenshot()
-    img_path = os.path.expanduser("~\\Pictures\\screenshot.png")
-    img.save(img_path)
-    speak(f"Screenshot saved as {img_path}.")
-    print(f"Screenshot saved as {img_path}.")
+def strip_keywords(query: str, action: str) -> str:
+    """Remove an action's keywords from the query, leaving its argument."""
+    query = normalize(query)
+    for action_name, keywords in COMMANDS:
+        if action_name != action:
+            continue
+        for k in sorted(keywords, key=len, reverse=True):
+            if k.isascii():
+                query = re.sub(rf"\b{re.escape(k)}\b", " ", query)
+            else:
+                query = query.replace(k, " ")
+    return " ".join(query.split())
 
-def takecommand() -> str:
-    """Takes microphone input from the user and returns it as text."""
+
+# ---------------------------------------------------------------- voice output
+_engine = None
+
+
+def _voice_languages(voice):
+    langs = []
+    for lang in getattr(voice, "languages", None) or []:
+        if isinstance(lang, bytes):
+            lang = lang.decode("utf-8", "ignore")
+        lang = "".join(ch for ch in str(lang) if ch.isprintable())
+        langs.append(lang.lower().replace("-", "_"))
+    return langs
+
+
+def pick_voice(voices, lang: str):
+    """Pick the voice that best matches a language tag like "zh-TW"."""
+    wanted = lang.lower().replace("-", "_")
+    prefix = wanted.split("_")[0]
+    for v in voices:
+        if wanted in _voice_languages(v):
+            return v
+    for v in voices:
+        if any(l.split("_")[0] == prefix for l in _voice_languages(v)):
+            return v
+    return None
+
+
+def get_engine():
+    global _engine
+    if _engine is None:
+        import pyttsx3
+
+        _engine = pyttsx3.init()
+        voice = pick_voice(_engine.getProperty("voices"), LANG)
+        if voice is not None:
+            _engine.setProperty("voice", voice.id)
+        _engine.setProperty("rate", 175)
+        _engine.setProperty("volume", 1.0)
+    return _engine
+
+
+def speak(text: str) -> None:
+    print(f"Jarvis: {text}")
+    if MUTE:
+        return
+    try:
+        engine = get_engine()
+        engine.say(text)
+        engine.runAndWait()
+    except Exception as e:  # never let audio problems crash the assistant
+        print(f"(speech output failed: {e})")
+
+
+# ----------------------------------------------------------------- voice input
+def takecommand(text_mode: bool = False):
+    """Return what the user said (lower-case), or None."""
+    if text_mode:
+        try:
+            line = input("You: ")
+        except EOFError:
+            return "exit"
+        return normalize(line) or None
+
+    import speech_recognition as sr
+
     r = sr.Recognizer()
+    r.pause_threshold = 1
     with sr.Microphone() as source:
         print("Listening...")
-        r.pause_threshold = 1
-
         try:
-            audio = r.listen(source, timeout=5)  # Listen with a timeout
+            audio = r.listen(source, timeout=5, phrase_time_limit=15)
         except sr.WaitTimeoutError:
-            speak("Timeout occurred. Please try again.")
-            return None
+            return None  # silence is normal; keep listening quietly
 
     try:
         print("Recognizing...")
-        query = r.recognize_google(audio, language="en-in")
-        print(query)
-        return query.lower()
+        query = r.recognize_google(audio, language=LANG)
+        print(f"You: {query}")
+        return normalize(query)
     except sr.UnknownValueError:
-        speak("Sorry, I did not understand that.")
-        return None
+        speak(msg("not_understood"))
     except sr.RequestError:
-        speak("Speech recognition service is unavailable.")
-        return None
-    except Exception as e:
-        speak(f"An error occurred: {e}")
-        print(f"Error: {e}")
-        return None
+        speak(msg("stt_down"))
+    return None
 
-def play_music(song_name=None) -> None:
-    """Plays music from the user's Music directory."""
-    song_dir = os.path.expanduser("~\\Music")
-    songs = os.listdir(song_dir)
 
-    if song_name:
-        songs = [song for song in songs if song_name.lower() in song.lower()]
+# ------------------------------------------------------------------- features
+def tell_time() -> None:
+    speak(msg("time", t=datetime.datetime.now().strftime("%H:%M")))
 
-    if songs:
-        song = random.choice(songs)
-        os.startfile(os.path.join(song_dir, song))
-        speak(f"Playing {song}.")
-        print(f"Playing {song}.")
+
+def tell_date() -> None:
+    now = datetime.datetime.now()
+    if IS_ZH:
+        weekday = "一二三四五六日"[now.weekday()]
+        d = f"{now.year}年{now.month}月{now.day}日 星期{weekday}"
     else:
-        speak("No song found.")
-        print("No song found.")
+        d = now.strftime("%A, %d %B %Y")
+    speak(msg("date", d=d))
 
-def set_name() -> None:
-    """Sets a new name for the assistant."""
-    speak("What would you like to name me?")
-    name = takecommand()
-    if name:
-        with open("assistant_name.txt", "w") as file:
-            file.write(name)
-        speak(f"Alright, I will be called {name} from now on.")
-    else:
-        speak("Sorry, I couldn't catch that.")
 
 def load_name() -> str:
-    """Loads the assistant's name from a file, or uses a default name."""
     try:
-        with open("assistant_name.txt", "r") as file:
-            return file.read().strip()
+        return (DATA_DIR / "assistant_name.txt").read_text(encoding="utf-8").strip() or "Jarvis"
     except FileNotFoundError:
-        return "Jarvis"  # Default name
+        return "Jarvis"
 
 
-def search_wikipedia(query):
-    """Searches Wikipedia and returns a summary."""
+def save_name(name: str) -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    (DATA_DIR / "assistant_name.txt").write_text(name, encoding="utf-8")
+
+
+def wishme() -> None:
+    speak(msg("welcome"))
+    hour = datetime.datetime.now().hour
+    if 4 <= hour < 12:
+        speak(msg("morning"))
+    elif 12 <= hour < 18:
+        speak(msg("afternoon"))
+    elif 18 <= hour < 24:
+        speak(msg("evening"))
+    else:
+        speak(msg("night"))
+    speak(msg("service", name=load_name()))
+
+
+def open_path(path: Path) -> None:
+    if SYSTEM == "Windows":
+        os.startfile(path)  # type: ignore[attr-defined]
+    elif SYSTEM == "Darwin":
+        subprocess.Popen(["open", str(path)])
+    else:
+        subprocess.Popen(["xdg-open", str(path)])
+
+
+def screenshot() -> None:
+    folder = Path.home() / "Pictures"
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"jarvis-{datetime.datetime.now():%Y%m%d-%H%M%S}.png"
     try:
-        speak("Searching Wikipedia...")
-        result = wikipedia.summary(query, sentences=2)
-        speak(result)
-        print(result)
+        import pyautogui
+
+        pyautogui.screenshot().save(path)
+        speak(msg("screenshot", path=path))
+    except Exception as e:
+        speak(msg("screenshot_fail", err=e))
+
+
+def find_songs(music_dir: Path, name: str = "", limit: int = 5000):
+    songs = []
+    if not music_dir.is_dir():
+        return songs
+    for root, _dirs, files in os.walk(music_dir):
+        for f in files:
+            if Path(f).suffix.lower() in AUDIO_EXTS and name.lower() in f.lower():
+                songs.append(Path(root) / f)
+                if len(songs) >= limit:
+                    return songs
+    return songs
+
+
+def play_music(song_name: str = "") -> None:
+    songs = find_songs(Path.home() / "Music", song_name)
+    if songs:
+        song = random.choice(songs)
+        open_path(song)
+        speak(msg("playing", song=song.stem))
+    else:
+        speak(msg("no_song"))
+
+
+def search_wikipedia(query: str) -> None:
+    import wikipedia
+
+    wikipedia.set_lang("zh" if IS_ZH else "en")
+    try:
+        speak(msg("wiki_search"))
+        speak(wikipedia.summary(query, sentences=2))
     except wikipedia.exceptions.DisambiguationError:
-        speak("Multiple results found. Please be more specific.")
+        speak(msg("wiki_multi"))
     except Exception:
-        speak("I couldn't find anything on Wikipedia.")
+        speak(msg("wiki_none"))
+
+
+def ask_llm(question: str, history: list, timeout: float = 120):
+    """Ask the local Ollama model. Returns the answer, or None if unavailable."""
+    system = (
+        "You are Jarvis, a concise voice assistant running on the user's Mac mini. "
+        "Answer in 1-3 short spoken sentences, without markdown or lists. "
+        + ("Always reply in Traditional Chinese (Taiwan)." if IS_ZH else "Reply in the user's language.")
+    )
+    messages = [{"role": "system", "content": system}] + history[-6:]
+    messages.append({"role": "user", "content": question})
+    body = json.dumps({"model": MODEL, "messages": messages, "stream": False}).encode()
+    req = urllib.request.Request(
+        f"{OLLAMA_URL}/api/chat", data=body, headers={"Content-Type": "application/json"}
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            answer = json.load(resp)["message"]["content"].strip()
+    except (urllib.error.URLError, OSError, KeyError, ValueError) as e:
+        print(f"(LLM unavailable: {e})")
+        return None
+    history += [{"role": "user", "content": question}, {"role": "assistant", "content": answer}]
+    return answer
+
+
+def tell_joke(history: list) -> None:
+    if IS_ZH:
+        joke = ask_llm("講一個簡短、適合大家的笑話。", history)
+        if joke:
+            speak(joke)
+            return
+    import pyjokes
+
+    speak(pyjokes.get_joke())
+
+
+def power(action: str, text_mode: bool) -> bool:
+    """Shut down or restart after confirmation. Returns True if it ran."""
+    if not ALLOW_POWER:
+        speak(msg("power_off"))
+        return False
+    speak(msg("confirm"))
+    answer = takecommand(text_mode) or ""
+    said_no = any(_matches(w, answer) for w in NO_WORDS)
+    if said_no or not any(_matches(w, answer) for w in YES_WORDS):
+        speak(msg("cancelled"))
+        return False
+    speak(msg(action))
+    if SYSTEM == "Windows":
+        os.system("shutdown /s /t 1" if action == "shutdown" else "shutdown /r /t 1")
+    elif SYSTEM == "Darwin":
+        verb = "shut down" if action == "shutdown" else "restart"
+        subprocess.run(["osascript", "-e", f'tell application "System Events" to {verb}'])
+    else:
+        subprocess.run(["systemctl", "poweroff" if action == "shutdown" else "reboot"])
+    return True
+
+
+def handle(query: str, history: list, text_mode: bool = False) -> bool:
+    """Run one command. Returns False when the assistant should stop."""
+    action = route(query)
+    if action == "time":
+        tell_time()
+    elif action == "date":
+        tell_date()
+    elif action == "wikipedia":
+        search_wikipedia(strip_keywords(query, "wikipedia"))
+    elif action == "music":
+        play_music(strip_keywords(query, "music"))
+    elif action == "youtube":
+        speak(msg("opening", site="YouTube"))
+        wb.open("https://www.youtube.com")
+    elif action == "google":
+        speak(msg("opening", site="Google"))
+        wb.open("https://www.google.com")
+    elif action == "rename":
+        speak(msg("ask_name"))
+        name = takecommand(text_mode)
+        if name:
+            save_name(name)
+            speak(msg("named", name=name))
+        else:
+            speak(msg("no_name"))
+    elif action == "screenshot":
+        screenshot()
+    elif action == "joke":
+        tell_joke(history)
+    elif action in ("shutdown", "restart"):
+        return not power(action, text_mode)
+    elif action == "exit":
+        speak(msg("bye"))
+        return False
+    else:
+        speak(ask_llm(query, history) or msg("no_llm"))
+    return True
+
+
+def main(argv=None) -> None:
+    argv = sys.argv[1:] if argv is None else argv
+    text_mode = "--text" in argv
+    history: list = []
+    wishme()
+    while True:
+        query = takecommand(text_mode)
+        if query and not handle(query, history, text_mode):
+            break
 
 
 if __name__ == "__main__":
-    wishme()
-
-    while True:
-        query = takecommand()
-        if not query:
-            continue
-
-        if "time" in query:
-            time()
-            
-        elif "date" in query:
-            date()
-
-        elif "wikipedia" in query:
-            query = query.replace("wikipedia", "").strip()
-            search_wikipedia(query)
-
-        elif "play music" in query:
-            song_name = query.replace("play music", "").strip()
-            play_music(song_name)
-
-        elif "open youtube" in query:
-            wb.open("youtube.com")
-            
-        elif "open google" in query:
-            wb.open("google.com")
-
-        elif "change your name" in query:
-            set_name()
-
-        elif "screenshot" in query:
-            screenshot()
-            speak("I've taken screenshot, please check it")
-
-        elif "tell me a joke" in query:
-            joke = pyjokes.get_joke()
-            speak(joke)
-            print(joke)
-
-        elif "shutdown" in query:
-            speak("Shutting down the system, goodbye!")
-            os.system("shutdown /s /f /t 1")
-            break
-            
-        elif "restart" in query:
-            speak("Restarting the system, please wait!")
-            os.system("shutdown /r /f /t 1")
-            break
-            
-        elif "offline" in query or "exit" in query:
-            speak("Going offline. Have a good day!")
-            break
+    main()
