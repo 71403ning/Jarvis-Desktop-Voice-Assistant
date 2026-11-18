@@ -1,4 +1,5 @@
 """Hardware-free tests for Jarvis: run with `python -m unittest discover tests`."""
+import json
 import os
 import sys
 import tempfile
@@ -126,6 +127,28 @@ class FeatureTest(unittest.TestCase):
     def test_llm_unavailable_returns_none(self):
         with mock.patch.object(jarvis, "OLLAMA_URL", "http://127.0.0.1:9"):
             self.assertIsNone(jarvis.ask_llm("hi", [], timeout=2))
+
+    def test_llm_request_disables_thinking(self):
+        sent = {}
+
+        class Resp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                return b'{"message": {"content": "ok"}}'
+
+        def fake_urlopen(req, timeout):
+            sent.update(json.loads(req.data))
+            return Resp()
+
+        with mock.patch("urllib.request.urlopen", fake_urlopen):
+            self.assertEqual(jarvis.ask_llm("hi", []), "ok")
+        self.assertIs(sent["think"], False)
+        self.assertFalse(sent["stream"])
 
     def test_power_is_disabled_by_default(self):
         with mock.patch.object(jarvis, "ALLOW_POWER", False), mock.patch("subprocess.run") as run, \

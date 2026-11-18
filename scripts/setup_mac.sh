@@ -16,11 +16,25 @@ fi
 
 MODELS="${JARVIS_MODELS:-breeze}"
 
-echo "==> Installing Python 3.12, PortAudio and Ollama"
-brew install python@3.12 portaudio ollama
+echo "==> Installing Python 3.12 and PortAudio"
+brew install python@3.12 portaudio
 
-echo "==> Starting Ollama as a background service (survives reboots)"
-brew services start ollama
+# Use one Ollama only: two installs (Ollama.app + Homebrew) run different
+# versions and fight over port 11434.
+if [ -d /Applications/Ollama.app ]; then
+  echo "==> Ollama.app found; using it (keep it in Login Items so it starts after reboot)"
+  if brew list ollama >/dev/null 2>&1; then
+    echo "    Homebrew also has ollama. Remove the duplicate with:"
+    echo "      brew services stop ollama && brew uninstall ollama"
+  fi
+  curl -fs http://localhost:11434/api/tags >/dev/null 2>&1 || open -a Ollama
+elif command -v ollama >/dev/null 2>&1; then
+  echo "==> Using existing ollama at $(command -v ollama)"
+else
+  echo "==> Installing Ollama with Homebrew and starting it as a background service"
+  brew install ollama
+  brew services start ollama
+fi
 
 echo "==> Creating virtual environment in .venv"
 PY="$(brew --prefix python@3.12)/bin/python3.12"
@@ -50,6 +64,9 @@ Done. Start Jarvis with:
   JARVIS_LANG=zh-TW .venv/bin/python Jarvis/jarvis.py --text    # keyboard / SSH
 
 Notes:
+  * If ~/.ollama/models points to an external drive, macOS must allow Ollama
+    to use it (System Settings > Privacy & Security > Files and Folders /
+    Removable Volumes), or downloads fail with "operation not permitted".
   * Mac mini has no built-in microphone: plug in a USB mic, webcam or headset.
   * macOS will ask Terminal for Microphone (and Screen Recording for screenshots)
     permission the first time. Allow it in System Settings > Privacy & Security.

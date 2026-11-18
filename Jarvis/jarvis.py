@@ -392,7 +392,11 @@ def ask_llm(question: str, history: list, timeout: float = 120):
     )
     messages = [{"role": "system", "content": system}] + history[-6:]
     messages.append({"role": "user", "content": question})
-    body = json.dumps({"model": current_model(), "messages": messages, "stream": False}).encode()
+    # think=False: reasoning models (qwen3, gemma-3 variants...) answer directly,
+    # which keeps voice replies fast; models without a thinking mode ignore it.
+    body = json.dumps(
+        {"model": current_model(), "messages": messages, "stream": False, "think": False}
+    ).encode()
     req = urllib.request.Request(
         f"{OLLAMA_URL}/api/chat", data=body, headers={"Content-Type": "application/json"}
     )
