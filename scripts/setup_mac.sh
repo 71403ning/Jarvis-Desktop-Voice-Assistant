@@ -1,7 +1,7 @@
 #!/bin/bash
 # One-shot installer for Jarvis on an Apple Silicon Mac (e.g. Mac mini M4).
-# Usage:  bash scripts/setup_mac.sh            (model: qwen2.5:7b)
-#         JARVIS_MODEL=qwen2.5:14b bash scripts/setup_mac.sh
+# Usage:  bash scripts/setup_mac.sh                      (downloads Breeze only)
+#         JARVIS_MODELS="breeze taide bailong" bash scripts/setup_mac.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -14,7 +14,7 @@ if ! command -v brew >/dev/null 2>&1; then
   exit 1
 fi
 
-MODEL="${JARVIS_MODEL:-qwen2.5:7b}"
+MODELS="${JARVIS_MODELS:-breeze}"
 
 echo "==> Installing Python 3.12, PortAudio and Ollama"
 brew install python@3.12 portaudio ollama
@@ -36,8 +36,9 @@ for _ in $(seq 1 30); do
   sleep 1
 done
 
-echo "==> Downloading model $MODEL (several GB, first time only)"
-ollama pull "$MODEL"
+echo "==> Downloading Taiwanese models: $MODELS (several GB each, first time only)"
+# shellcheck disable=SC2086
+bash scripts/pull_tw_models.sh $MODELS || echo "!! Some models failed; Jarvis still runs with the rest."
 
 echo "==> Running self-tests"
 .venv/bin/python -m unittest discover -s tests

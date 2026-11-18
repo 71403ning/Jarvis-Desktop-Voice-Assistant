@@ -46,11 +46,18 @@ Anything Jarvis has no built-in command for is answered by a local LLM through
 | Variable | Default | Meaning |
 |---|---|---|
 | `JARVIS_LANG` | `en-US` | Speech and voice language, e.g. `zh-TW` |
-| `JARVIS_MODEL` | `qwen2.5:7b` | Ollama model |
+| `JARVIS_MODEL` | `breeze` | Ollama model (overrides the one chosen by voice) |
 | `JARVIS_OLLAMA_URL` | `http://localhost:11434` | Ollama server |
 | `JARVIS_DATA_DIR` | `~/.jarvis` | Where settings are stored |
 | `JARVIS_ALLOW_POWER` | off | Set to `1` to allow voice shutdown/restart (asks for confirmation) |
 | `JARVIS_MUTE` | off | Set to `1` to print replies without speaking |
+
+### Taiwanese models
+
+`bash scripts/pull_tw_models.sh` downloads three Traditional Chinese models and names them
+`breeze` (MediaTek Breeze 2 8B), `taide` (TAIDE Gemma-3 12B) and `bailong` (INX Bailong 7B).
+Say 「切換模型 TAIDE」 or "switch model to breeze" to change; the choice is remembered and the
+previous model is unloaded, because a 16 GB Mac fits only one comfortably.
 
 Run the hardware-free tests with `python -m unittest discover -s tests`.
 

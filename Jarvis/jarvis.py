@@ -5,7 +5,7 @@ by a local LLM served by Ollama (https://ollama.com), so no API key is needed.
 
 Configuration (environment variables):
     JARVIS_LANG        Speech/voice language, e.g. "zh-TW" or "en-US" (default en-US)
-    JARVIS_MODEL       Ollama model name (default qwen2.5:7b)
+    JARVIS_MODEL       Ollama model name (default breeze; see scripts/pull_tw_models.sh)
     JARVIS_OLLAMA_URL  Ollama server URL (default http://localhost:11434)
     JARVIS_DATA_DIR    Where settings are stored (default ~/.jarvis)
     JARVIS_ALLOW_POWER Set to 1 to allow voice shutdown/restart (off by default)
@@ -30,9 +30,18 @@ SYSTEM = platform.system()  # "Darwin", "Windows" or "Linux"
 LANG = os.environ.get("JARVIS_LANG", "en-US")
 IS_ZH = LANG.lower().startswith("zh")
 OLLAMA_URL = os.environ.get("JARVIS_OLLAMA_URL", "http://localhost:11434").rstrip("/")
-MODEL = os.environ.get("JARVIS_MODEL", "qwen2.5:7b")
 DATA_DIR = Path(os.environ.get("JARVIS_DATA_DIR", Path.home() / ".jarvis"))
 ALLOW_POWER = os.environ.get("JARVIS_ALLOW_POWER") == "1"
+DEFAULT_MODEL = "breeze"
+
+# Spoken name -> Ollama model name. The short names are created by
+# scripts/pull_tw_models.sh; any other installed Ollama model also works.
+MODEL_ALIASES = {
+    "taide": "taide", "台德": "taide", "泰德": "taide",
+    "breeze": "breeze", "微風": "breeze", "布利茲": "breeze",
+    "bailong": "bailong", "百龍": "bailong", "白龍": "bailong",
+    "qwen": "qwen2.5:7b", "通義": "qwen2.5:7b",
+}
 MUTE = os.environ.get("JARVIS_MUTE") == "1"
 AUDIO_EXTS = {".mp3", ".m4a", ".aac", ".wav", ".flac", ".ogg", ".aiff"}
 
@@ -65,11 +74,17 @@ MESSAGES = {
     "bye": ("Going offline. Have a good day!", "離線了，祝你有美好的一天！"),
     "no_llm": ("Sorry, I can't do that yet.", "抱歉，這個我還不會。"),
     "opening": ("Opening {site}.", "正在開啟 {site}。"),
+    "model_now": ("I'm using {model}. Options: taide, breeze, bailong.", "目前使用 {model}，可選 TAIDE、Breeze、百龍。"),
+    "model_set": ("Switched to {model}.", "已切換到 {model}。"),
+    "model_missing": ("{model} is not installed. Run scripts/pull_tw_models.sh first.",
+                      "{model} 還沒下載，請先執行 scripts/pull_tw_models.sh。"),
 }
 
 # (action, keywords). Order matters: the first matching action wins, so
 # commands that carry an argument come before short words like "time".
 COMMANDS = [
+    ("model", ["switch model", "change model", "use model", "which model",
+               "切換模型", "換模型", "模型換成", "用什麼模型", "哪個模型", "目前模型"]),
     ("wikipedia", ["wikipedia", "維基百科", "維基"]),
     ("music", ["play music", "播放音樂", "放音樂", "放歌"]),
     ("youtube", ["open youtube", "打開youtube", "開啟youtube"]),
@@ -311,6 +326,63 @@ def search_wikipedia(query: str) -> None:
         speak(msg("wiki_none"))
 
 
+def current_model() -> str:
+    env = os.environ.get("JARVIS_MODEL")
+    if env:
+        return env
+    try:
+        return (DATA_DIR / "model.txt").read_text(encoding="utf-8").strip() or DEFAULT_MODEL
+    except FileNotFoundError:
+        return DEFAULT_MODEL
+
+
+def find_model_alias(query: str):
+    compact = normalize(query).replace(" ", "")
+    for spoken, model in MODEL_ALIASES.items():
+        if spoken in compact:
+            return model
+    return None
+
+
+def _ollama(path: str, payload=None, timeout: float = 10):
+    data = None if payload is None else json.dumps(payload).encode()
+    req = urllib.request.Request(f"{OLLAMA_URL}{path}", data=data, headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.load(resp)
+
+
+def installed_models():
+    """Names of installed Ollama models (with and without ':latest'), or None if Ollama is down."""
+    try:
+        names = [m["name"] for m in _ollama("/api/tags").get("models", [])]
+    except (urllib.error.URLError, OSError, KeyError, ValueError):
+        return None
+    return set(names) | {n.removesuffix(":latest") for n in names}
+
+
+def switch_model(query: str) -> None:
+    """Switch the LLM by name and free the old one's memory (16 GB Macs fit one at a time)."""
+    old = current_model()
+    new = find_model_alias(query)
+    if new is None:
+        speak(msg("model_now", model=old))
+        return
+    installed = installed_models()
+    if installed is not None and new not in installed:
+        speak(msg("model_missing", model=new))
+        return
+    if os.environ.get("JARVIS_MODEL"):
+        os.environ["JARVIS_MODEL"] = new  # this run only; env var wins over the saved choice
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    (DATA_DIR / "model.txt").write_text(new, encoding="utf-8")
+    if old != new:
+        try:  # keep_alive 0 unloads the previous model right away
+            _ollama("/api/generate", {"model": old, "keep_alive": 0})
+        except (urllib.error.URLError, OSError, ValueError):
+            pass
+    speak(msg("model_set", model=new))
+
+
 def ask_llm(question: str, history: list, timeout: float = 120):
     """Ask the local Ollama model. Returns the answer, or None if unavailable."""
     system = (
@@ -320,7 +392,7 @@ def ask_llm(question: str, history: list, timeout: float = 120):
     )
     messages = [{"role": "system", "content": system}] + history[-6:]
     messages.append({"role": "user", "content": question})
-    body = json.dumps({"model": MODEL, "messages": messages, "stream": False}).encode()
+    body = json.dumps({"model": current_model(), "messages": messages, "stream": False}).encode()
     req = urllib.request.Request(
         f"{OLLAMA_URL}/api/chat", data=body, headers={"Content-Type": "application/json"}
     )
@@ -370,7 +442,9 @@ def power(action: str, text_mode: bool) -> bool:
 def handle(query: str, history: list, text_mode: bool = False) -> bool:
     """Run one command. Returns False when the assistant should stop."""
     action = route(query)
-    if action == "time":
+    if action == "model":
+        switch_model(query)
+    elif action == "time":
         tell_time()
     elif action == "date":
         tell_date()

@@ -63,6 +63,52 @@ class RouteTest(unittest.TestCase):
         self.assertEqual(jarvis.strip_keywords("播放音樂 周杰倫", "music"), "周杰倫")
 
 
+class ModelTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.patches = [mock.patch.object(jarvis, "DATA_DIR", Path(self.tmp.name)),
+                        mock.patch.dict(os.environ, {}, clear=False)]
+        for p in self.patches:
+            p.start()
+        os.environ.pop("JARVIS_MODEL", None)
+
+    def tearDown(self):
+        for p in reversed(self.patches):
+            p.stop()
+        self.tmp.cleanup()
+
+    def test_routes(self):
+        self.assertEqual(jarvis.route("切換模型 taide"), "model")
+        self.assertEqual(jarvis.route("模型換成百龍"), "model")
+        self.assertEqual(jarvis.route("switch model to breeze"), "model")
+        self.assertEqual(jarvis.route("你現在用哪個模型"), "model")
+        # A question *about* models must still go to the LLM.
+        self.assertIsNone(jarvis.route("什麼是大型語言模型"))
+
+    def test_aliases(self):
+        self.assertEqual(jarvis.find_model_alias("切換模型 TAIDE"), "taide")
+        self.assertEqual(jarvis.find_model_alias("換模型 百龍"), "bailong")
+        self.assertEqual(jarvis.find_model_alias("switch model to Breeze"), "breeze")
+        self.assertIsNone(jarvis.find_model_alias("切換模型"))
+
+    def test_default_and_saved_choice(self):
+        self.assertEqual(jarvis.current_model(), "breeze")
+        with mock.patch.object(jarvis, "installed_models", return_value={"taide", "breeze"}), \
+                mock.patch.object(jarvis, "_ollama") as unload:
+            jarvis.switch_model("切換模型 taide")
+            unload.assert_called_once_with("/api/generate", {"model": "breeze", "keep_alive": 0})
+        self.assertEqual(jarvis.current_model(), "taide")
+
+    def test_missing_model_is_not_selected(self):
+        with mock.patch.object(jarvis, "installed_models", return_value={"breeze"}):
+            jarvis.switch_model("切換模型 百龍")
+        self.assertEqual(jarvis.current_model(), "breeze")
+
+    def test_env_var_wins(self):
+        os.environ["JARVIS_MODEL"] = "qwen2.5:7b"
+        self.assertEqual(jarvis.current_model(), "qwen2.5:7b")
+
+
 class VoiceTest(unittest.TestCase):
     def test_pick_voice_prefers_exact_language(self):
         voices = [
