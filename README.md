@@ -59,6 +59,10 @@ Anything Jarvis has no built-in command for is answered by a local LLM through
 Say 「切換模型 TAIDE」 or "switch model to breeze" to change; the choice is remembered and the
 previous model is unloaded, because a 16 GB Mac fits only one comfortably.
 
+To keep a small internal disk free, `bash scripts/move_models_to_ssd.sh` lists model folders
+(Ollama, Hugging Face, Whisper, LM Studio) that are still on the internal disk; add `--apply`
+to move them to `/Volumes/SSD/ai-models` (or `SSD=/Volumes/<name>`) and leave symlinks behind.
+
 Run the hardware-free tests with `python -m unittest discover -s tests`.
 
 ## 📌Installation
