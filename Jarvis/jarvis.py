@@ -1,17 +1,17 @@
-"""Jarvis desktop voice assistant.
+"""Jarvis 桌面語音助理。
 
-Runs on macOS, Windows and Linux. Commands that are not built in are answered
-by a local LLM served by Ollama (https://ollama.com), so no API key is needed.
+可在 macOS、Windows、Linux 上執行。不屬於內建指令的問題，會交給本機 Ollama
+(https://ollama.com) 上的大型語言模型回答，不需要任何 API 金鑰。
 
-Configuration (environment variables):
-    JARVIS_LANG        Speech/voice language, e.g. "zh-TW" or "en-US" (default en-US)
-    JARVIS_MODEL       Ollama model name (default breeze; see scripts/pull_tw_models.sh)
-    JARVIS_OLLAMA_URL  Ollama server URL (default http://localhost:11434)
-    JARVIS_DATA_DIR    Where settings are stored (default ~/.jarvis)
-    JARVIS_ALLOW_POWER Set to 1 to allow voice shutdown/restart (off by default)
-    JARVIS_MUTE        Set to 1 to print replies without speaking them
+設定（環境變數）：
+    JARVIS_LANG        語音辨識與發音的語言，例如 "zh-TW" 或 "en-US"（預設 en-US）
+    JARVIS_MODEL       Ollama 模型名稱（預設 breeze；見 scripts/pull_tw_models.sh）
+    JARVIS_OLLAMA_URL  Ollama 伺服器網址（預設 http://localhost:11434）
+    JARVIS_DATA_DIR    設定檔存放位置（預設 ~/.jarvis）
+    JARVIS_ALLOW_POWER 設為 1 才允許用語音關機/重開機（預設關閉）
+    JARVIS_MUTE        設為 1 時只印出回覆、不發出聲音
 
-Run with --text to type commands instead of speaking (handy over SSH).
+加上 --text 參數可改用鍵盤輸入，不需要麥克風（透過 SSH 使用時很方便）。
 """
 import datetime
 import json
@@ -26,7 +26,7 @@ import urllib.request
 import webbrowser as wb
 from pathlib import Path
 
-SYSTEM = platform.system()  # "Darwin", "Windows" or "Linux"
+SYSTEM = platform.system()  # "Darwin"（macOS）、"Windows" 或 "Linux"
 LANG = os.environ.get("JARVIS_LANG", "en-US")
 IS_ZH = LANG.lower().startswith("zh")
 OLLAMA_URL = os.environ.get("JARVIS_OLLAMA_URL", "http://localhost:11434").rstrip("/")
@@ -34,8 +34,8 @@ DATA_DIR = Path(os.environ.get("JARVIS_DATA_DIR", Path.home() / ".jarvis"))
 ALLOW_POWER = os.environ.get("JARVIS_ALLOW_POWER") == "1"
 DEFAULT_MODEL = "breeze"
 
-# Spoken name -> Ollama model name. The short names are created by
-# scripts/pull_tw_models.sh; any other installed Ollama model also works.
+# 口說名稱 -> Ollama 模型名稱。短名稱由 scripts/pull_tw_models.sh 建立；
+# 其他已安裝的 Ollama 模型也可以直接使用。
 MODEL_ALIASES = {
     "taide": "taide", "台德": "taide", "泰德": "taide",
     "breeze": "breeze", "微風": "breeze", "布利茲": "breeze",
@@ -80,8 +80,8 @@ MESSAGES = {
                       "{model} 還沒下載，請先執行 scripts/pull_tw_models.sh。"),
 }
 
-# (action, keywords). Order matters: the first matching action wins, so
-# commands that carry an argument come before short words like "time".
+# (動作, 關鍵字)。順序有意義：第一個符合的動作優先，所以帶參數的指令
+# （例如維基百科）要排在 "time" 這類短關鍵字之前。
 COMMANDS = [
     ("model", ["switch model", "change model", "use model", "which model",
                "切換模型", "換模型", "模型換成", "用什麼模型", "哪個模型", "目前模型"]),
@@ -114,12 +114,12 @@ def normalize(text: str) -> str:
 def _matches(keyword: str, query: str) -> bool:
     if keyword.isascii():
         return re.search(rf"\b{re.escape(keyword)}\b", query) is not None
-    # Chinese speech results may or may not contain spaces.
+    # 中文語音辨識結果可能有空格也可能沒有，所以比對前先去掉空格。
     return keyword in query.replace(" ", "")
 
 
 def route(query: str):
-    """Return the action name for a query, or None if no command matches."""
+    """回傳查詢對應的動作名稱；沒有符合的指令則回傳 None。"""
     query = normalize(query)
     for action, keywords in COMMANDS:
         if any(_matches(k, query) for k in keywords):
@@ -128,7 +128,7 @@ def route(query: str):
 
 
 def strip_keywords(query: str, action: str) -> str:
-    """Remove an action's keywords from the query, leaving its argument."""
+    """從查詢中移除該動作的關鍵字，留下參數（例如歌名、搜尋詞）。"""
     query = normalize(query)
     for action_name, keywords in COMMANDS:
         if action_name != action:
@@ -141,7 +141,7 @@ def strip_keywords(query: str, action: str) -> str:
     return " ".join(query.split())
 
 
-# ---------------------------------------------------------------- voice output
+# ---------------------------------------------------------------- 語音輸出
 _engine = None
 
 
@@ -156,7 +156,7 @@ def _voice_languages(voice):
 
 
 def pick_voice(voices, lang: str):
-    """Pick the voice that best matches a language tag like "zh-TW"."""
+    """挑選最符合語言標籤（例如 "zh-TW"）的系統語音。"""
     wanted = lang.lower().replace("-", "_")
     prefix = wanted.split("_")[0]
     for v in voices:
@@ -190,13 +190,13 @@ def speak(text: str) -> None:
         engine = get_engine()
         engine.say(text)
         engine.runAndWait()
-    except Exception as e:  # never let audio problems crash the assistant
+    except Exception as e:  # 音訊出問題時不能讓助理整個當掉
         print(f"(speech output failed: {e})")
 
 
-# ----------------------------------------------------------------- voice input
+# ----------------------------------------------------------------- 語音輸入
 def takecommand(text_mode: bool = False):
-    """Return what the user said (lower-case), or None."""
+    """回傳使用者說的內容（轉小寫）；沒有內容時回傳 None。"""
     if text_mode:
         try:
             line = input("You: ")
@@ -213,7 +213,7 @@ def takecommand(text_mode: bool = False):
         try:
             audio = r.listen(source, timeout=5, phrase_time_limit=15)
         except sr.WaitTimeoutError:
-            return None  # silence is normal; keep listening quietly
+            return None  # 沒人說話是正常的，安靜地繼續聽
 
     try:
         print("Recognizing...")
@@ -227,7 +227,7 @@ def takecommand(text_mode: bool = False):
     return None
 
 
-# ------------------------------------------------------------------- features
+# ------------------------------------------------------------------- 功能
 def tell_time() -> None:
     speak(msg("time", t=datetime.datetime.now().strftime("%H:%M")))
 
@@ -352,7 +352,7 @@ def _ollama(path: str, payload=None, timeout: float = 10):
 
 
 def installed_models():
-    """Names of installed Ollama models (with and without ':latest'), or None if Ollama is down."""
+    """已安裝的 Ollama 模型名稱（含與不含 ':latest' 兩種寫法）；Ollama 沒在執行時回傳 None。"""
     try:
         names = [m["name"] for m in _ollama("/api/tags").get("models", [])]
     except (urllib.error.URLError, OSError, KeyError, ValueError):
@@ -361,7 +361,7 @@ def installed_models():
 
 
 def switch_model(query: str) -> None:
-    """Switch the LLM by name and free the old one's memory (16 GB Macs fit one at a time)."""
+    """依名稱切換模型，並釋放舊模型佔用的記憶體（16GB 的 Mac 一次只適合載入一個）。"""
     old = current_model()
     new = find_model_alias(query)
     if new is None:
@@ -372,11 +372,11 @@ def switch_model(query: str) -> None:
         speak(msg("model_missing", model=new))
         return
     if os.environ.get("JARVIS_MODEL"):
-        os.environ["JARVIS_MODEL"] = new  # this run only; env var wins over the saved choice
+        os.environ["JARVIS_MODEL"] = new  # 只影響這次執行；環境變數的優先順序高於存檔的選擇
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     (DATA_DIR / "model.txt").write_text(new, encoding="utf-8")
     if old != new:
-        try:  # keep_alive 0 unloads the previous model right away
+        try:  # keep_alive 設為 0 會立即卸載上一個模型
             _ollama("/api/generate", {"model": old, "keep_alive": 0})
         except (urllib.error.URLError, OSError, ValueError):
             pass
@@ -384,7 +384,7 @@ def switch_model(query: str) -> None:
 
 
 def ask_llm(question: str, history: list, timeout: float = 120):
-    """Ask the local Ollama model. Returns the answer, or None if unavailable."""
+    """詢問本機 Ollama 模型。回傳答案；無法連線時回傳 None。"""
     system = (
         "You are Jarvis, a concise voice assistant running on the user's Mac mini. "
         "Answer in 1-3 short spoken sentences, without markdown or lists. "
@@ -392,8 +392,8 @@ def ask_llm(question: str, history: list, timeout: float = 120):
     )
     messages = [{"role": "system", "content": system}] + history[-6:]
     messages.append({"role": "user", "content": question})
-    # think=False: reasoning models (qwen3, gemma-3 variants...) answer directly,
-    # which keeps voice replies fast; models without a thinking mode ignore it.
+    # think=False：讓具有推理模式的模型（qwen3、gemma-3 衍生模型等）直接回答，
+    # 語音回覆才夠快；沒有推理模式的模型會忽略這個參數。
     body = json.dumps(
         {"model": current_model(), "messages": messages, "stream": False, "think": False}
     ).encode()
@@ -422,7 +422,7 @@ def tell_joke(history: list) -> None:
 
 
 def power(action: str, text_mode: bool) -> bool:
-    """Shut down or restart after confirmation. Returns True if it ran."""
+    """經使用者確認後關機或重開機。有執行時回傳 True。"""
     if not ALLOW_POWER:
         speak(msg("power_off"))
         return False
@@ -444,7 +444,7 @@ def power(action: str, text_mode: bool) -> bool:
 
 
 def handle(query: str, history: list, text_mode: bool = False) -> bool:
-    """Run one command. Returns False when the assistant should stop."""
+    """執行一個指令。助理應該結束時回傳 False。"""
     action = route(query)
     if action == "model":
         switch_model(query)

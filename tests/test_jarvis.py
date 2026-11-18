@@ -1,4 +1,4 @@
-"""Hardware-free tests for Jarvis: run with `python -m unittest discover tests`."""
+"""Jarvis 的測試，不需要麥克風、喇叭或螢幕。執行：python -m unittest discover -s tests"""
 import json
 import os
 import sys
@@ -49,7 +49,7 @@ class RouteTest(unittest.TestCase):
                 self.assertEqual(jarvis.route(query), action)
 
     def test_no_false_substring_matches(self):
-        # "sometimes" contains "time"; "update" contains "date".
+        # "sometimes" 裡有 "time"、"update" 裡有 "date"，不應被誤判成指令。
         self.assertIsNone(jarvis.route("sometimes i wonder"))
         self.assertIsNone(jarvis.route("please update me"))
 
@@ -83,7 +83,7 @@ class ModelTest(unittest.TestCase):
         self.assertEqual(jarvis.route("模型換成百龍"), "model")
         self.assertEqual(jarvis.route("switch model to breeze"), "model")
         self.assertEqual(jarvis.route("你現在用哪個模型"), "model")
-        # A question *about* models must still go to the LLM.
+        # 「詢問」模型相關知識的問題，仍要交給 AI 回答，不能當成切換指令。
         self.assertIsNone(jarvis.route("什麼是大型語言模型"))
 
     def test_aliases(self):
