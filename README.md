@@ -29,7 +29,41 @@ It can do a lot of cool things, some of them being:
 
 ## Requirements
 
-Python 3.6+
+Python 3.9+ on Windows, macOS or Linux. A microphone is needed for voice mode.
+
+## 📌Quick start on a Mac (Apple Silicon, e.g. Mac mini M4)
+
+```bash
+git clone <URL> && cd Jarvis-Desktop-Voice-Assistant
+bash scripts/setup_mac.sh                      # Homebrew, PortAudio, Ollama, venv, model
+JARVIS_LANG=zh-TW .venv/bin/python Jarvis/jarvis.py           # voice
+JARVIS_LANG=zh-TW .venv/bin/python Jarvis/jarvis.py --text    # keyboard / SSH
+```
+
+Anything Jarvis has no built-in command for is answered by a local LLM through
+[Ollama](https://ollama.com), so no API key is needed. Settings:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `JARVIS_LANG` | `en-US` | Speech and voice language, e.g. `zh-TW` |
+| `JARVIS_MODEL` | `breeze` | Ollama model (overrides the one chosen by voice) |
+| `JARVIS_OLLAMA_URL` | `http://localhost:11434` | Ollama server |
+| `JARVIS_DATA_DIR` | `~/.jarvis` | Where settings are stored |
+| `JARVIS_ALLOW_POWER` | off | Set to `1` to allow voice shutdown/restart (asks for confirmation) |
+| `JARVIS_MUTE` | off | Set to `1` to print replies without speaking |
+
+### Taiwanese models
+
+`bash scripts/pull_tw_models.sh` downloads three Traditional Chinese models and names them
+`breeze` (MediaTek Breeze 2 8B), `taide` (TAIDE Gemma-3 12B) and `bailong` (INX Bailong 7B).
+Say 「切換模型 TAIDE」 or "switch model to breeze" to change; the choice is remembered and the
+previous model is unloaded, because a 16 GB Mac fits only one comfortably.
+
+To keep a small internal disk free, `bash scripts/move_models_to_ssd.sh` lists model folders
+(Ollama, Hugging Face, Whisper, LM Studio) that are still on the internal disk; add `--apply`
+to move them to `/Volumes/SSD/ai-models` (or `SSD=/Volumes/<name>`) and leave symlinks behind.
+
+Run the hardware-free tests with `python -m unittest discover -s tests`.
 
 ## 📌Installation
 
@@ -69,7 +103,7 @@ Python 3.6+
 6. **Run the Assistant**
   - Run the main script:
     ```bash
-    python jarvis.py
+    python Jarvis/jarvis.py
     ```
   - Now Enjoy with your own assistant !!!!
 
